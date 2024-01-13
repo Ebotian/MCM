@@ -1,6 +1,6 @@
 # my coding plan for MCM
 
-in total 33 types of problems, 10 types per day, 3 days in total
+in total 33 types of problems, 7 types per day, 5 days in total
 
 ## day1
 
