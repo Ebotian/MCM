@@ -18,4 +18,4 @@ in total 33 types of problems, 10 types per day, 3 days in total
 2. GA(genetic algorithm)
 3. linear algorithm
 4. random algorithm
-5. Simulated annealing method
+5. annealing method
