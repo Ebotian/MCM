@@ -35,34 +35,50 @@ index_array = subdata[match[id]][subdata[match[id]]['server'] == 2].index.values
 subdata[match[id]].loc[index_array, 'point_victor'] = 1 - subdata[match[id]].loc[index_array, 'point_victor']
 #print(index_array)
 ##############
-# Calculate the time difference between consecutive rows
+def get_average_interval(id, subdata):
+    # Convert the timestamp column to datetime format
+    subdata[match[id]]['elapsed_time'] = pd.to_timedelta(subdata[match[id]]['elapsed_time'])
 
-# Convert the timestamp column to datetime format
-subdata[match[id]]['elapsed_time'] = pd.to_timedelta(subdata[match[id]]['elapsed_time'])
+    # Calculate the time difference between consecutive rows
+    subdata[match[id]]['time_diff'] = subdata[match[id]]['elapsed_time'].diff()
 
-# Calculate the time difference between consecutive rows
-subdata[match[id]]['time_diff'] = subdata[match[id]]['elapsed_time'].diff()
+    # Calculate the 5th and 95th percentiles
+    lower_threshold = subdata[match[id]]['time_diff'].quantile(0.05)
+    upper_threshold = subdata[match[id]]['time_diff'].quantile(0.95)
 
-# Calculate the 5th and 95th percentiles
-lower_threshold = subdata[match[id]]['time_diff'].quantile(0.05)
-upper_threshold = subdata[match[id]]['time_diff'].quantile(0.95)
+    # Exclude the top 5% and bottom 5% of periods
+    filtered_diff = subdata[match[id]]['time_diff'][(subdata[match[id]]['time_diff'] > lower_threshold) & (subdata[match[id]]['time_diff'] < upper_threshold)]
 
-# Exclude the top 5% and bottom 5% of periods
-filtered_diff = subdata[match[id]]['time_diff'][(subdata[match[id]]['time_diff'] > lower_threshold) & (subdata[match[id]]['time_diff'] < upper_threshold)]
+    # Calculate the average of the remaining intervals
+    average_interval = filtered_diff.mean()
 
-# Calculate the average of the remaining intervals
-average_interval = filtered_diff.mean()
-
-print(f'Average interval (excluding top 5% and bottom 5%): {average_interval}')
-
-# Convert the time differences to integer seconds
-subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].dt.total_seconds()
-
-# Replace 'NaT' values with 0
-subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].fillna(0).astype(int)
-#fill nan with 0
+    return average_interval
+## Convert the timestamp column to datetime format
+#subdata[match[id]]['elapsed_time'] = pd.to_timedelta(subdata[match[id]]['elapsed_time'])
+#
+## Calculate the time difference between consecutive rows
+#subdata[match[id]]['time_diff'] = subdata[match[id]]['elapsed_time'].diff()
+#
+## Calculate the 5th and 95th percentiles
+#lower_threshold = subdata[match[id]]['time_diff'].quantile(0.05)
+#upper_threshold = subdata[match[id]]['time_diff'].quantile(0.95)
+#
+## Exclude the top 5% and bottom 5% of periods
+#filtered_diff = subdata[match[id]]['time_diff'][(subdata[match[id]]['time_diff'] > lower_threshold) & (subdata[match[id]]['time_diff'] < upper_threshold)]
+#
+## Calculate the average of the remaining intervals
+#average_interval = filtered_diff.mean()
+#
+#print(f'Average interval (excluding top 5% and bottom 5%): {average_interval}')
+#
+## Convert the time differences to integer seconds
+#subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].dt.total_seconds()
+#
+## Replace 'NaT' values with 0
+#subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].fillna(0).astype(int)
+##fill nan with 0
 ############ add features
-add_feature=["score_diff"]
+#add_feature=["score_diff"]
 
 ########## defining the new features
 
@@ -333,27 +349,42 @@ async def find_best_train_size_async(start, end, step, id):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, find_best_train_size, start, end, step, id)
 
-# Initialize variables to store the best train size and percentage for each index
-best_train_sizes = {}
-best_percentages = {}
+## Initialize variables to store the best train size and percentage for each index
+#best_train_sizes = {}
+#best_percentages = {}
 
-# Create a list to hold all the tasks
-tasks = []
+## Create a list to hold all the tasks
+#tasks = []
 
-# Loop over all indices in the match list
-for id in range(len(match)):
-    # Create a task for this index and add it to the list of tasks
-    task = asyncio.ensure_future(find_best_train_size_async(start, end, step, id))
-    tasks.append(task)
+## Loop over all indices in the match list
+#for id in range(len(match)):
+#    # Create a task for this index and add it to the list of tasks
+#    task = asyncio.ensure_future(find_best_train_size_async(start, end, step, id))
+#    tasks.append(task)
+#
+## Run all the tasks concurrently
+#results = asyncio.get_event_loop().run_until_complete(asyncio.gather(*tasks))
+#
+## Store the best train size and percentage for each index
+#for id in range(len(match)):
+#    best_train_sizes[id], best_percentages[id] = results[id]
+#
+## Print the best train size and percentage for each index
+#for id in range(len(match)):
+#    print(f"Index: {id}, Best train size: {best_train_sizes[id]}, Best percentage: {best_percentages[id]}%")
+#
 
-# Run all the tasks concurrently
-results = asyncio.get_event_loop().run_until_complete(asyncio.gather(*tasks))
+def generate_predictions(model, id, subdata):
+    # Calculate the average interval in seconds
+    average_interval_seconds = get_average_interval(id, subdata).total_seconds()
 
-# Store the best train size and percentage for each index
-for id in range(len(match)):
-    best_train_sizes[id], best_percentages[id] = results[id]
+    # Calculate the number of seconds in 6 hours
+    six_hours_in_seconds = 6 * 60 * 60
 
-# Print the best train size and percentage for each index
-for id in range(len(match)):
-    print(f"Index: {id}, Best train size: {best_train_sizes[id]}, Best percentage: {best_percentages[id]}%")
+    # Calculate the number of steps that correspond to 6 hours
+    steps = int(six_hours_in_seconds / average_interval_seconds)
 
+    # Generate predictions for the next 6 hours
+    predictions = model.forecast(steps=steps)
+
+    return predictions
