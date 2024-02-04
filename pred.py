@@ -97,17 +97,9 @@ train_indices = np.intersect1d(train.index.values, index_array)
 # Get the indices in test that are in index_array
 test_indices = np.intersect1d(test.index.values, index_array)
 
-#print("Train indices:", train_indices)
-#print("Test indices:", test_indices)
-
-# Convert DataFrame indices to array indices for train
 train_array_indices = train_indices - min(train.index.values)
-
-# Convert DataFrame indices to array indices for test
 test_array_indices = test_indices - min(test.index.values)
 
-#print("Train array indices:", train_array_indices)
-#print("Test array indices:", test_array_indices)
 
 #Markov Chain
 from pydtmc import MarkovChain
@@ -187,8 +179,6 @@ predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_d
 
 # SARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
-from sklearn.metrics import mean_squared_error
-from math import sqrt
 
 def train_and_predict_sarima(train_data, test_data, test_array_indices):
     # Train the SARIMA model
@@ -262,35 +252,48 @@ print(f"Percentage of ARIMA: {percentage_arima}%")
 print(f"Percentage of SARIMA: {percentage_sarima}%")
 # Print RMSE values
 
+#weight calculate
+def calculate_weights(percentage_markov, percentage_arima, percentage_sarima):
+    # Calculate the total weight
+    total_weight = (abs(percentage_markov / 100 - 0.5) + abs(percentage_arima / 100 - 0.5) + abs(percentage_sarima / 100 - 0.5))
 
-def find_best_train_size(start, end, step):
+    # Calculate the individual weights
+    weight_markov = abs(percentage_markov / 100 - 0.5) / total_weight
+    weight_arima = abs(percentage_arima / 100 - 0.5) / total_weight
+    weight_sarima = abs(percentage_sarima / 100 - 0.5) / total_weight
+
+    return weight_markov, weight_arima, weight_sarima
+
+def reverse_predictions(predictions, percentage):
+    # Reverse the predictions if the accuracy is less than 50%
+    if percentage < 50:
+        predictions = [1.0 - p for p in predictions]
+    return predictions
+
+def find_best_train_size(start, end, step,id):
     best_percentage = 0
     best_train_size = 0
 
     for train_size in np.arange(start, end, step):
         # Split the data into training and test sets
-        train_data = data[:int(len(data) * train_size)]
-        test_data = data[int(len(data) * train_size):]
+        train_data = subdata[match[id]][:int(len(data) * train_size)].values
+        test_data = subdata[match[id]][int(len(data) * train_size):]
+        train_data = train["point_victor"].values
+        test_data = test["point_victor"].values
 
         # Train the models and make predictions
         # (replace this with your actual model training and prediction code)
-        predictions_markov, percentage_markov = train_and_predict_markov(train_data, test_data)
-        predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_data)
-        predictions_sarima, percentage_sarima = train_and_predict_sarima(train_data, test_data)
+        predictions_markov, percentage_markov = train_and_predict_markov(train_data, test_data, test_array_indices)
+        predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_data, test_array_indices)
+        predictions_sarima, percentage_sarima = train_and_predict_sarima(train_data, test_data, test_array_indices)
 
         # Calculate the weights
-        total_weight = (abs(percentage_markov / 100 - 0.5) + abs(percentage_arima / 100 - 0.5) + abs(percentage_sarima / 100 - 0.5))
-        weight_markov = abs(percentage_markov / 100 - 0.5) / total_weight
-        weight_arima = abs(percentage_arima / 100 - 0.5) / total_weight
-        weight_sarima = abs(percentage_sarima / 100 - 0.5) / total_weight
+        weight_markov, weight_arima, weight_sarima = calculate_weights(percentage_markov, percentage_arima, percentage_sarima)
 
         # Reverse the predictions if the accuracy is less than 50%
-        if percentage_markov < 50:
-            predictions_markov = [1.0 - p for p in predictions_markov]
-        if percentage_arima < 50:
-            predictions_arima = [1.0 - p for p in predictions_arima]
-        if percentage_sarima < 50:
-            predictions_sarima = [1.0 - p for p in predictions_sarima]
+        predictions_markov = reverse_predictions(predictions_markov, percentage_markov)
+        predictions_arima = reverse_predictions(predictions_arima, percentage_arima)
+        predictions_sarima = reverse_predictions(predictions_sarima, percentage_sarima)
 
         # Convert lists to numpy arrays
         predictions_markov = np.array(predictions_markov)
@@ -313,3 +316,44 @@ def find_best_train_size(start, end, step):
             best_train_size = train_size
 
     return best_train_size, best_percentage
+
+start = 0.5  # start of the train size range
+end = 0.98  # end of the train size range
+step = 0.02  # step size for the train size range
+id = 0  # replace this with the actual id
+
+#best_train_size, best_percentage = find_best_train_size(start, end, step, id)
+
+#print(f"Best train size: {best_train_size}, Best percentage: {best_percentage}%")
+
+import asyncio
+
+async def find_best_train_size_async(start, end, step, id):
+    # Wrap the synchronous function in a executor
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, find_best_train_size, start, end, step, id)
+
+# Initialize variables to store the best train size and percentage for each index
+best_train_sizes = {}
+best_percentages = {}
+
+# Create a list to hold all the tasks
+tasks = []
+
+# Loop over all indices in the match list
+for id in range(len(match)):
+    # Create a task for this index and add it to the list of tasks
+    task = asyncio.ensure_future(find_best_train_size_async(start, end, step, id))
+    tasks.append(task)
+
+# Run all the tasks concurrently
+results = asyncio.get_event_loop().run_until_complete(asyncio.gather(*tasks))
+
+# Store the best train size and percentage for each index
+for id in range(len(match)):
+    best_train_sizes[id], best_percentages[id] = results[id]
+
+# Print the best train size and percentage for each index
+for id in range(len(match)):
+    print(f"Index: {id}, Best train size: {best_train_sizes[id]}, Best percentage: {best_percentages[id]}%")
+
