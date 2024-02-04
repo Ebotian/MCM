@@ -1,40 +1,67 @@
 import pandas as pd
 import numpy as np
+from re import T
+from statsmodels.tsa.arima.model import ARIMA
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_squared_error
+from math import sqrt
 
 ############ load and digitize the data
 data=pd.read_csv('/home/ebotian/MCM/tennis.csv')
-data = pd.get_dummies(data, columns=['winner_shot_type','serve_width','serve_depth','return_depth'])
+
 ############
 
 ############# pre-process the data
-# fill nan with 0, and replace AD with 50
-data = data.fillna(0)
-data = data.replace('AD', 50.0)
-data['point_victor']=data["point_victor"].replace(2,0)
-#print(data.iloc[:,15])
+    # fill nan with 0, and replace AD with 50
+def pre_process(data):
+    data = pd.get_dummies(data, columns=['winner_shot_type','serve_width','serve_depth','return_depth'])
+    data = data.fillna(0)
+    data = data.replace('AD', 50.0)
+    data['point_victor']=data["point_victor"].replace(2,0)
+    #print(data.iloc[:,15])
 
-# split the data into different match
-grouped = dict(tuple(data.groupby(data['match_id'].ne(data['match_id'].shift()).cumsum())))
+    # split the data into different match
+    grouped = dict(tuple(data.groupby(data['match_id'].ne(data['match_id'].shift()).cumsum())))
 
-# Rename the subdata
-subdata = {df['match_id'].iloc[0]: df for _, df in grouped.items()}
+    # Rename the subdata
+    subdata = {df['match_id'].iloc[0]: df for _, df in grouped.items()}
 
-# Create a new dataset from the first column, excluding duplicates
-match = pd.DataFrame(data.iloc[:, 0].drop_duplicates()).iloc[:,0].tolist()
-#print(match_id[0])
+    # Create a new dataset from the first column, excluding duplicates
+    match = pd.DataFrame(data.iloc[:, 0].drop_duplicates()).iloc[:,0].tolist()
+    #print(match_id[0])
+    return subdata,match
+subdata,match=pre_process(data)
 ##############
-id=0
+
+def process_all_ids(match_ids, subdata):
+    for id in match_ids:
+        index_array = subdata[match[id]][subdata[match[id]]['server'] == 2].index.values
+        subdata[match[id]].loc[index_array, 'point_victor'] = 1 - subdata[match[id]].loc[index_array, 'point_victor']
+        target=pd.DataFrame(subdata[match[id]]["point_victor"])
+        # Add the "elapsed_time" column to the "target" DataFrame
+        subdata[match[id]]['elapsed_time'] = pd.to_timedelta(subdata[match[id]]['elapsed_time'])
+        target.insert(0, 'elapsed_time', subdata[match[id]]['elapsed_time'])
+        target['elapsed_time'] = target['elapsed_time'].dt.total_seconds()
+        subdata[match[id]]=subdata[match[id]].drop(columns=["point_victor"])
+        features=subdata[match[id]].iloc[:,4:]
+        return target,features,subdata,index_array
+
+# Replace with your actual match ids
+match_ids = range(0, len(match)-1)  # Replace with your actual match ids
+target,features,subdata,index_array=process_all_ids(match_ids, subdata)
+
 ##############
 ##############
 #invert the victor when the server is 2 to get server_victor
 #and after the prediction, we invert the victor again
 # Get the index array
-index_array = subdata[match[id]][subdata[match[id]]['server'] == 2].index.values
+
 
 # Invert the values in the "point_victor" column for the specified rows
-subdata[match[id]].loc[index_array, 'point_victor'] = 1 - subdata[match[id]].loc[index_array, 'point_victor']
+
 #print(index_array)
 ##############
+# Calculate the time difference between consecutive rows
 def get_average_interval(id, subdata):
     # Convert the timestamp column to datetime format
     subdata[match[id]]['elapsed_time'] = pd.to_timedelta(subdata[match[id]]['elapsed_time'])
@@ -53,51 +80,16 @@ def get_average_interval(id, subdata):
     average_interval = filtered_diff.mean()
 
     return average_interval
-## Convert the timestamp column to datetime format
-#subdata[match[id]]['elapsed_time'] = pd.to_timedelta(subdata[match[id]]['elapsed_time'])
-#
-## Calculate the time difference between consecutive rows
-#subdata[match[id]]['time_diff'] = subdata[match[id]]['elapsed_time'].diff()
-#
-## Calculate the 5th and 95th percentiles
-#lower_threshold = subdata[match[id]]['time_diff'].quantile(0.05)
-#upper_threshold = subdata[match[id]]['time_diff'].quantile(0.95)
-#
-## Exclude the top 5% and bottom 5% of periods
-#filtered_diff = subdata[match[id]]['time_diff'][(subdata[match[id]]['time_diff'] > lower_threshold) & (subdata[match[id]]['time_diff'] < upper_threshold)]
-#
-## Calculate the average of the remaining intervals
-#average_interval = filtered_diff.mean()
-#
-#print(f'Average interval (excluding top 5% and bottom 5%): {average_interval}')
-#
-## Convert the time differences to integer seconds
-#subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].dt.total_seconds()
-#
-## Replace 'NaT' values with 0
-#subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].fillna(0).astype(int)
-##fill nan with 0
-############ add features
-#add_feature=["score_diff"]
+
 
 ########## defining the new features
 
 #subdata[match_id[0]][add_feature[0]] = subdata[match_id[0]]['p1_games'] - subdata[match_id[0]]['p2_games']
 # split the data into features and target
-target=pd.DataFrame(subdata[match[id]]["point_victor"])
-# Add the "elapsed_time" column to the "target" DataFrame
-target.insert(0, 'elapsed_time', subdata[match[id]]['elapsed_time'])
-target['elapsed_time'] = target['elapsed_time'].dt.total_seconds()
 
-subdata[match[id]]=subdata[match[id]].drop(columns=["point_victor"])
-features=subdata[match[id]].iloc[:,4:]
+
 #print(target)
-from re import T
-from statsmodels.tsa.arima.model import ARIMA
-from statsmodels.tsa.statespace.sarimax import SARIMAX
-from sklearn.metrics import mean_squared_error
-from math import sqrt
-from sklearn.linear_model import LinearRegression
+
 
 # Split data into training set and test set
 train_size = int(len(target) * 0.7)
@@ -155,12 +147,9 @@ def train_and_predict_markov(train_data, test_data, test_array_indices):
     same_values_markov = (test_data == predictions_markov).sum()
     percentage_markov = same_values_markov / len(test_data) * 100
 
-    return predictions_markov, percentage_markov
+    return predictions_markov, percentage_markov, mc
 
-train_data = train["point_victor"].values
-test_data = test["point_victor"].values
 
-predictions_markov, percentage_markov = train_and_predict_markov(train_data, test_data, test_array_indices)
 
 # ARIMA
 from statsmodels.tsa.arima.model import ARIMA
@@ -186,12 +175,12 @@ def train_and_predict_arima(train_data, test_data, test_array_indices):
     same_values_arima = (test_data == predictions_arima_binary).sum()
     percentage_arima = same_values_arima / len(test_data) * 100
 
-    return predictions_arima, percentage_arima
+    return predictions_arima, percentage_arima, model_arima_fit
 
 train_data = train["point_victor"].values
 test_data = test["point_victor"].values
 
-predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_data, test_array_indices)
+
 
 # SARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
@@ -216,12 +205,13 @@ def train_and_predict_sarima(train_data, test_data, test_array_indices):
     same_values_sarima = (test_data == predictions_sarima_binary).sum()
     percentage_sarima = same_values_sarima / len(test_data) * 100
 
-    return predictions_sarima, percentage_sarima
+    return predictions_sarima, percentage_sarima, model_sarima_fit
 
 train_data = train["point_victor"].values
 test_data = test["point_victor"].values
-
-predictions_sarima, percentage_sarima = train_and_predict_sarima(train_data, test_data, test_array_indices)
+predictions_markov, percentage_markov,mc = train_and_predict_markov(train_data, test_data, test_array_indices)
+predictions_arima, percentage_arima,model_arima_fit = train_and_predict_arima(train_data, test_data, test_array_indices)
+predictions_sarima, percentage_sarima,model_sarima_fit = train_and_predict_sarima(train_data, test_data, test_array_indices)
 
 # Calculate the weights
 total_weight=(abs(percentage_markov / 100 - 0.5) + abs(percentage_arima / 100 - 0.5) + abs(percentage_sarima / 100 - 0.5))
@@ -286,7 +276,7 @@ def reverse_predictions(predictions, percentage):
         predictions = [1.0 - p for p in predictions]
     return predictions
 
-def find_best_train_size(start, end, step,id):
+def find_best_train_size(start, end, step,id,subdata):
     best_percentage = 0
     best_train_size = 0
 
@@ -299,9 +289,9 @@ def find_best_train_size(start, end, step,id):
 
         # Train the models and make predictions
         # (replace this with your actual model training and prediction code)
-        predictions_markov, percentage_markov = train_and_predict_markov(train_data, test_data, test_array_indices)
-        predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_data, test_array_indices)
-        predictions_sarima, percentage_sarima = train_and_predict_sarima(train_data, test_data, test_array_indices)
+        predictions_markov, percentage_markov,mc = train_and_predict_markov(train_data, test_data, test_array_indices)
+        predictions_arima, percentage_arima,model_arima_fit = train_and_predict_arima(train_data, test_data, test_array_indices)
+        predictions_sarima, percentage_sarima,model_sarima_fit = train_and_predict_sarima(train_data, test_data, test_array_indices)
 
         # Calculate the weights
         weight_markov, weight_arima, weight_sarima = calculate_weights(percentage_markov, percentage_arima, percentage_sarima)
@@ -331,7 +321,7 @@ def find_best_train_size(start, end, step,id):
             best_percentage = percentage_combined
             best_train_size = train_size
 
-    return best_train_size, best_percentage
+    return best_train_size, best_percentage,mc,model_arima_fit,model_sarima_fit
 
 start = 0.5  # start of the train size range
 end = 0.98  # end of the train size range
@@ -344,7 +334,7 @@ id = 0  # replace this with the actual id
 
 import asyncio
 
-async def find_best_train_size_async(start, end, step, id):
+async def find_best_train_size_async(start, end, step, id,subdata):
     # Wrap the synchronous function in a executor
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, find_best_train_size, start, end, step, id)
