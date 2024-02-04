@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 ############ load and digitize the data
 data=pd.read_csv('/home/ebotian/MCM/tennis.csv')
@@ -23,6 +24,16 @@ match = pd.DataFrame(data.iloc[:, 0].drop_duplicates()).iloc[:,0].tolist()
 #print(match_id[0])
 ##############
 id=0
+##############
+##############
+#invert the victor when the server is 2 to get server_victor
+#and after the prediction, we invert the victor again
+# Get the index array
+index_array = subdata[match[id]][subdata[match[id]]['server'] == 2].index.values
+
+# Invert the values in the "point_victor" column for the specified rows
+subdata[match[id]].loc[index_array, 'point_victor'] = 1 - subdata[match[id]].loc[index_array, 'point_victor']
+#print(index_array)
 ##############
 # Calculate the time difference between consecutive rows
 
@@ -50,7 +61,6 @@ subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].dt.total_secon
 # Replace 'NaT' values with 0
 subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].fillna(0).astype(int)
 #fill nan with 0
-#subdata[match[id]]['time_diff'] = subdata[match[id]]['time_diff'].fillna(0)
 ############ add features
 add_feature=["score_diff"]
 
@@ -77,109 +87,136 @@ from sklearn.linear_model import LinearRegression
 train_size = int(len(target) * 0.7)
 train, test = target[0:train_size], target[train_size:len(target)]
 train=train.astype(float)
-print(train)
-print(test)
-import numpy as np
+#print(train)
+#print(test)
+
+#find index
+# Get the indices in train that are in index_array
+train_indices = np.intersect1d(train.index.values, index_array)
+
+# Get the indices in test that are in index_array
+test_indices = np.intersect1d(test.index.values, index_array)
+
+#print("Train indices:", train_indices)
+#print("Test indices:", test_indices)
+
+# Convert DataFrame indices to array indices for train
+train_array_indices = train_indices - min(train.index.values)
+
+# Convert DataFrame indices to array indices for test
+test_array_indices = test_indices - min(test.index.values)
+
+#print("Train array indices:", train_array_indices)
+#print("Test array indices:", test_array_indices)
+
+#Markov Chain
 from pydtmc import MarkovChain
 
-# Prepare the data
+def train_and_predict_markov(train_data, test_data, test_array_indices):
+    # Calculate the transition matrix
+    transition_matrix = np.zeros((2, 2))
+    for i in range(len(train_data) - 1):
+        transition_matrix[int(train_data[i]), int(train_data[i+1])] += 1
+    transition_matrix /= transition_matrix.sum(axis=1, keepdims=True)
+
+    # Create the Markov Chain
+    mc = MarkovChain(transition_matrix, ['0', '1'])
+
+    # Function to predict the next state
+    def predict_next_state(mc, current_state):
+        return np.random.choice(mc.states, p=mc.p[int(current_state)])
+
+    # Get the last state from the training data
+    last_state_train = train_data[-1]
+
+    # Generate the first prediction from the last state of the training data
+    first_prediction = predict_next_state(mc, last_state_train)
+
+    # Generate the rest of the predictions from the test data
+    predictions_markov = [predict_next_state(mc, state) for state in test_data[:-1]]
+
+    # Insert the first prediction at the beginning of the predictions list
+    predictions_markov.insert(0, first_prediction)
+    predictions_markov = np.array(predictions_markov).astype(float)
+
+    # Invert the values in predictions and test_data for the specified indices
+    predictions_markov[test_array_indices] = 1 - predictions_markov[test_array_indices]
+    test_data[test_array_indices] = 1 - test_data[test_array_indices]
+
+    # Calculate the percentage of correct predictions
+    same_values_markov = (test_data == predictions_markov).sum()
+    percentage_markov = same_values_markov / len(test_data) * 100
+
+    return predictions_markov, percentage_markov
+
 train_data = train["point_victor"].values
-
-# Calculate the transition matrix
-transition_matrix = np.zeros((2, 2))
-for i in range(len(train_data) - 1):
-    transition_matrix[int(train_data[i]), int(train_data[i+1])] += 1
-transition_matrix /= transition_matrix.sum(axis=1, keepdims=True)
-
-# Create the Markov Chain
-mc = MarkovChain(transition_matrix, ['0', '1'])
-
-# Function to predict the next state
-def predict_next_state(mc, current_state):
-    return np.random.choice(mc.states, p=mc.p[int(current_state)])
-
-# Predict the next state for the test data
 test_data = test["point_victor"].values
 
-# Get the last state from the training data
-last_state_train = train_data[-1]
-
-# Generate the first prediction from the last state of the training data
-first_prediction = predict_next_state(mc, last_state_train)
-
-# Generate the rest of the predictions from the test data
-predictions_markov = [predict_next_state(mc, state) for state in test_data[:-1]]
-
-# Insert the first prediction at the beginning of the predictions list
-predictions_markov.insert(0, first_prediction)
-
-#print(predictions)
-#print(test_data[1:])
-
-# Calculate the RMSE
-rmse_markov = mean_squared_error(test_data[:], np.array(predictions_markov).astype(float), squared=False)
-
-print(rmse_markov)
-
-# Calculate the number of same values
-same_values = (test_data[:] == np.array(predictions_markov).astype(float)).sum()
-
-# Calculate the percentage
-percentage_markov = same_values / len(test_data[:]) * 100
-
-print(f"Number of same values: {same_values}")
-print(f"Percentage: {percentage_markov}%")
+predictions_markov, percentage_markov = train_and_predict_markov(train_data, test_data, test_array_indices)
 
 # ARIMA
-model_arima = ARIMA(train["point_victor"], order=(5,1,0))
-model_arima_fit = model_arima.fit()
-predictions_arima = model_arima_fit.forecast(steps=len(test))
+from statsmodels.tsa.arima.model import ARIMA
+from sklearn.metrics import mean_squared_error
+from math import sqrt
 
+def train_and_predict_arima(train_data, test_data, test_array_indices):
+    # Train the ARIMA model
+    model_arima = ARIMA(train_data, order=(5,1,0))
+    model_arima_fit = model_arima.fit()
 
-#print(forecast_output)
-#print(test["point_victor"])
-rmse_arima = sqrt(mean_squared_error(test["point_victor"], predictions_arima))
-#print(rmse_arima)
+    # Make predictions
+    predictions_arima = model_arima_fit.forecast(steps=len(test_data))
 
-# Convert the ARIMA predictions
-forecast_output_binary = np.where(predictions_arima > 0.5, 1, 0)
+    # Invert the predictions for the specified indices
+    predictions_arima[test_array_indices] = 1 - predictions_arima[test_array_indices]
+    test_data[test_array_indices] = 1 - test_data[test_array_indices]
 
-# Calculate the RMSE
-rmse_arima_binary = sqrt(mean_squared_error(test["point_victor"], forecast_output_binary))
+    # Convert the ARIMA predictions to binary
+    predictions_arima_binary = np.where(predictions_arima > 0.5, 1, 0)
 
-# Calculate the number of same values
-same_values_arima = (test["point_victor"] == forecast_output_binary).sum()
+    # Calculate the percentage of correct predictions
+    same_values_arima = (test_data == predictions_arima_binary).sum()
+    percentage_arima = same_values_arima / len(test_data) * 100
 
-# Calculate the percentage
-percentage_arima = same_values_arima / len(test["point_victor"]) * 100
+    return predictions_arima, percentage_arima
 
-print(f"RMSE: {rmse_arima_binary}")
-print(f"Number of same values: {same_values_arima}")
-print(f"Percentage: {percentage_arima}%")
+train_data = train["point_victor"].values
+test_data = test["point_victor"].values
+
+predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_data, test_array_indices)
 
 # SARIMA
-model_sarima = SARIMAX(train["point_victor"], order=(1, 1, 1), seasonal_order=(0, 0, 0, 0))
-model_sarima_fit = model_sarima.fit(disp=0)
-predictions_sarima = model_sarima_fit.forecast(steps=len(test))
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+from sklearn.metrics import mean_squared_error
+from math import sqrt
 
-rmse_sarima = sqrt(mean_squared_error(test["point_victor"], predictions_sarima))
-print(rmse_sarima)
+def train_and_predict_sarima(train_data, test_data, test_array_indices):
+    # Train the SARIMA model
+    model_sarima = SARIMAX(train_data, order=(1, 1, 1), seasonal_order=(0, 0, 0, 0))
+    model_sarima_fit = model_sarima.fit(disp=0)
 
-# Convert the SARIMA predictions
-predictions_sarima_binary = np.where(predictions_sarima > 0.5, 1, 0)
+    # Make predictions
+    predictions_sarima = model_sarima_fit.forecast(steps=len(test_data))
+    predictions_sarima = np.array(predictions_sarima)
 
-# Calculate the RMSE
-rmse_sarima_binary = sqrt(mean_squared_error(test["point_victor"], predictions_sarima_binary))
+    # Invert the predictions for the specified indices
+    predictions_sarima[test_array_indices] = 1 - predictions_sarima[test_array_indices]
+    test_data[test_array_indices] = 1 - test_data[test_array_indices]
 
-# Calculate the number of same values
-same_values_sarima = (test["point_victor"] == predictions_sarima_binary).sum()
+    # Convert the SARIMA predictions to binary
+    predictions_sarima_binary = np.where(predictions_sarima > 0.5, 1, 0)
 
-# Calculate the percentage
-percentage_sarima = same_values_sarima / len(test["point_victor"]) * 100
+    # Calculate the percentage of correct predictions
+    same_values_sarima = (test_data == predictions_sarima_binary).sum()
+    percentage_sarima = same_values_sarima / len(test_data) * 100
 
-print(f"RMSE: {rmse_sarima_binary}")
-print(f"Number of same values: {same_values_sarima}")
-print(f"Percentage: {percentage_sarima}%")
+    return predictions_sarima, percentage_sarima
+
+train_data = train["point_victor"].values
+test_data = test["point_victor"].values
+
+predictions_sarima, percentage_sarima = train_and_predict_sarima(train_data, test_data, test_array_indices)
+
 # Calculate the weights
 total_weight=(abs(percentage_markov / 100 - 0.5) + abs(percentage_arima / 100 - 0.5) + abs(percentage_sarima / 100 - 0.5))
 weight_markov = abs(percentage_markov / 100 - 0.5) / total_weight
@@ -187,15 +224,16 @@ weight_arima = abs(percentage_arima / 100 - 0.5) / total_weight
 weight_sarima = abs(percentage_sarima / 100 - 0.5)/ total_weight
 # Reverse the predictions if the accuracy is less than 50%
 if percentage_markov < 50:
-    predictions_markov = [1.0 - float(p) for p in predictions_markov]
+    predictions_markov = [1.0 - p for p in predictions_markov]
 if percentage_arima < 50:
     predictions_arima = [1.0 - p for p in predictions_arima]
 if percentage_sarima < 50:
     predictions_sarima = [1.0 - p for p in predictions_sarima]
 
-print(predictions_markov)
+#print(predictions_markov)
 # Convert lists to numpy arrays
-predictions_markov = np.array(predictions_markov).astype(float)
+# Convert lists to numpy arrays
+predictions_markov = np.array(predictions_markov)
 predictions_arima = np.array(predictions_arima)
 predictions_sarima = np.array(predictions_sarima)
 
@@ -206,13 +244,13 @@ combined_predictions = weight_markov * predictions_markov + weight_arima * predi
 combined_predictions_binary = np.where(combined_predictions > 0.5, 1, 0)
 
 # Calculate the RMSE
-rmse_combined = sqrt(mean_squared_error(test["point_victor"], combined_predictions_binary))
+rmse_combined = sqrt(mean_squared_error(test_data, combined_predictions_binary))
 
 # Calculate the number of same values
-same_values_combined = (test["point_victor"] == combined_predictions_binary).sum()
+same_values_combined = (test_data == combined_predictions_binary).sum()
 
 # Calculate the percentage
-percentage_combined = same_values_combined / len(test["point_victor"]) * 100
+percentage_combined = same_values_combined / len(test_data) * 100
 
 print(f"RMSE: {rmse_combined}")
 print(f"Number of same values: {same_values_combined}")
@@ -223,8 +261,55 @@ print(f"Percentage of Markov: {percentage_markov}%")
 print(f"Percentage of ARIMA: {percentage_arima}%")
 print(f"Percentage of SARIMA: {percentage_sarima}%")
 # Print RMSE values
-print('RMSE values:')
-print('Markov Chain: ', rmse_markov)
-print('ARIMA: ', rmse_arima)
-print('SARIMA: ', rmse_sarima)
-#print('LSTM: ', rmse_lstm)
+
+
+def find_best_train_size(start, end, step):
+    best_percentage = 0
+    best_train_size = 0
+
+    for train_size in np.arange(start, end, step):
+        # Split the data into training and test sets
+        train_data = data[:int(len(data) * train_size)]
+        test_data = data[int(len(data) * train_size):]
+
+        # Train the models and make predictions
+        # (replace this with your actual model training and prediction code)
+        predictions_markov, percentage_markov = train_and_predict_markov(train_data, test_data)
+        predictions_arima, percentage_arima = train_and_predict_arima(train_data, test_data)
+        predictions_sarima, percentage_sarima = train_and_predict_sarima(train_data, test_data)
+
+        # Calculate the weights
+        total_weight = (abs(percentage_markov / 100 - 0.5) + abs(percentage_arima / 100 - 0.5) + abs(percentage_sarima / 100 - 0.5))
+        weight_markov = abs(percentage_markov / 100 - 0.5) / total_weight
+        weight_arima = abs(percentage_arima / 100 - 0.5) / total_weight
+        weight_sarima = abs(percentage_sarima / 100 - 0.5) / total_weight
+
+        # Reverse the predictions if the accuracy is less than 50%
+        if percentage_markov < 50:
+            predictions_markov = [1.0 - p for p in predictions_markov]
+        if percentage_arima < 50:
+            predictions_arima = [1.0 - p for p in predictions_arima]
+        if percentage_sarima < 50:
+            predictions_sarima = [1.0 - p for p in predictions_sarima]
+
+        # Convert lists to numpy arrays
+        predictions_markov = np.array(predictions_markov)
+        predictions_arima = np.array(predictions_arima)
+        predictions_sarima = np.array(predictions_sarima)
+
+        # Calculate the combined predictions
+        combined_predictions = weight_markov * predictions_markov + weight_arima * predictions_arima + weight_sarima * predictions_sarima
+
+        # Convert the combined predictions to binary
+        combined_predictions_binary = np.where(combined_predictions > 0.5, 1, 0)
+
+        # Calculate the percentage
+        same_values_combined = (test_data == combined_predictions_binary).sum()
+        percentage_combined = same_values_combined / len(test_data) * 100
+
+        # Update best_percentage and best_train_size if this is the highest percentage so far
+        if percentage_combined > best_percentage:
+            best_percentage = percentage_combined
+            best_train_size = train_size
+
+    return best_train_size, best_percentage
