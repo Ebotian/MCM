@@ -5,6 +5,7 @@ from statsmodels.tsa.arima.model import ARIMA
 from statsmodels.tsa.statespace.sarimax import SARIMAX
 from sklearn.metrics import mean_squared_error
 from math import sqrt
+from pydtmc import MarkovChain
 
 ############ load and digitize the data
 data=pd.read_csv('/home/ebotian/MCM/tennis.csv')
@@ -30,6 +31,7 @@ def pre_process(data):
     match = pd.DataFrame(data.iloc[:, 0].drop_duplicates()).iloc[:,0].tolist()
     #print(match_id[0])
     return subdata,match
+
 subdata,match=pre_process(data)
 ##############
 
@@ -110,7 +112,6 @@ test_array_indices = test_indices - min(test.index.values)
 
 
 #Markov Chain
-from pydtmc import MarkovChain
 
 def train_and_predict_markov(train_data, test_data, test_array_indices):
     # Calculate the transition matrix
@@ -158,7 +159,7 @@ from math import sqrt
 
 def train_and_predict_arima(train_data, test_data, test_array_indices):
     # Train the ARIMA model
-    model_arima = ARIMA(train_data, order=(5,1,0))
+    model_arima = ARIMA(train_data, order=(2,0,2))
     model_arima_fit = model_arima.fit()
 
     # Make predictions
@@ -179,7 +180,28 @@ def train_and_predict_arima(train_data, test_data, test_array_indices):
 
 train_data = train["point_victor"].values
 test_data = test["point_victor"].values
+import itertools
 
+# Define the p, d and q parameters to take any value between 0 and 2
+p = d = q = range(0, 3)
+
+# Generate all different combinations of p, d and q triplets
+pdq = list(itertools.product(p, d, q))
+
+# Run a grid with pdq to find the best parameters
+best_aic = np.inf
+best_pdq = None
+for param in pdq:
+    try:
+        model_arima = ARIMA(train_data, order=param)
+        model_arima_fit = model_arima.fit()
+        if model_arima_fit.aic < best_aic:
+            best_aic = model_arima_fit.aic
+            best_pdq = param
+    except:
+        continue
+
+print('Best ARIMA parameters:', best_pdq)
 
 
 # SARIMA
@@ -187,7 +209,7 @@ from statsmodels.tsa.statespace.sarimax import SARIMAX
 
 def train_and_predict_sarima(train_data, test_data, test_array_indices):
     # Train the SARIMA model
-    model_sarima = SARIMAX(train_data, order=(1, 1, 1), seasonal_order=(0, 0, 0, 0))
+    model_sarima = SARIMAX(train_data, order=(0, 1, 1), seasonal_order=(0, 0, 0, 0))
     model_sarima_fit = model_sarima.fit(disp=0)
 
     # Make predictions
@@ -206,6 +228,30 @@ def train_and_predict_sarima(train_data, test_data, test_array_indices):
     percentage_sarima = same_values_sarima / len(test_data) * 100
 
     return predictions_sarima, percentage_sarima, model_sarima_fit
+
+import itertools
+from statsmodels.tsa.statespace.sarimax import SARIMAX
+
+# Define the p, d and q parameters to take any value between 0 and 2
+p = d = q = range(0, 3)
+
+# Generate all different combinations of p, d and q triplets
+pdq = list(itertools.product(p, d, q))
+
+# Run a grid with pdq to find the best parameters
+best_aic = np.inf
+best_pdq = None
+for param in pdq:
+    try:
+        model_sarima = SARIMAX(train_data, order=param, seasonal_order=(0, 0, 0, 0))
+        model_sarima_fit = model_sarima.fit(disp=0)
+        if model_sarima_fit.aic < best_aic:
+            best_aic = model_sarima_fit.aic
+            best_pdq = param
+    except:
+        continue
+
+print('Best SARIMAX parameters:', best_pdq)
 
 train_data = train["point_victor"].values
 test_data = test["point_victor"].values
@@ -328,7 +374,7 @@ end = 0.98  # end of the train size range
 step = 0.02  # step size for the train size range
 id = 0  # replace this with the actual id
 
-#best_train_size, best_percentage = find_best_train_size(start, end, step, id)
+best_train_size, best_percentage,mc,model_arima_fit,model_sarima_fit = find_best_train_size(start, end, step, id,subdata)
 
 #print(f"Best train size: {best_train_size}, Best percentage: {best_percentage}%")
 
@@ -378,3 +424,28 @@ def generate_predictions(model, id, subdata):
     predictions = model.forecast(steps=steps)
 
     return predictions
+
+arima_6hours = generate_predictions(model_arima_fit, id, subdata)
+print(arima_6hours)
+sarima_6hours = generate_predictions(model_sarima_fit, id, subdata)
+print(sarima_6hours)
+
+def generate_mc_predictions(mc, steps):
+    # Generate a sequence of states for the next 6 hours
+    predictions = mc.simulate(steps)
+
+    return predictions
+
+# Calculate the average interval in seconds
+average_interval_seconds = get_average_interval(id, subdata).total_seconds()
+
+# Calculate the number of seconds in 6 hours
+six_hours_in_seconds = 6 * 60 * 60
+
+# Calculate the number of steps that correspond to 6 hours
+steps = int(six_hours_in_seconds / average_interval_seconds)
+
+# Generate Markov Chain predictions
+mc_predictions = generate_mc_predictions(mc, steps)
+
+print(mc_predictions)
