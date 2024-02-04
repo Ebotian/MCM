@@ -1,14 +1,14 @@
+from itertools import chain
 import pandas as pd
 import numpy as np
 from re import T
 from sklearn.metrics import mean_squared_error
 from math import sqrt
-from pomegranate import MarkovChain
-
+import markovify
 id=0
 
 ############ load and digitize the data
-data=pd.read_csv('/home/ebotian/MCM/tennis.csv')
+data=pd.read_csv('/home/ebotian/MCM/tennis2.csv')
 
 ############
 
@@ -32,10 +32,11 @@ def pre_process(data):
     return subdata,match
 
 subdata,match=pre_process(data)
+#print(subdata[match[1]])
 ##############
 
-def process_all_ids(match_ids, subdata):
-    for id in match_ids:
+def process_all_ids(subdata):
+    for id in range(len(match)-1):
         index_array = subdata[match[id]][subdata[match[id]]['server'] == 2].index.values
         subdata[match[id]].loc[index_array, 'point_victor'] = 1 - subdata[match[id]].loc[index_array, 'point_victor']
         target=pd.DataFrame(subdata[match[id]]["point_victor"])
@@ -45,12 +46,12 @@ def process_all_ids(match_ids, subdata):
         target['elapsed_time'] = target['elapsed_time'].dt.total_seconds()
         #subdata[match[id]]=subdata[match[id]].drop(columns=["point_victor"])
         features=subdata[match[id]].drop(columns=["point_victor"]).iloc[:,4:]
-        return target,features,subdata,index_array
+
+    return target,features,subdata,index_array
 
 # Replace with your actual match ids
-match_ids = range(0, len(match)-1)  # Replace with your actual match ids
-target,features,subdata,index_array=process_all_ids(match_ids, subdata)
-
+target,features,subdata,index_array=process_all_ids(subdata)
+#print(subdata[match[1]])
 ##############
 ##############
 #invert the victor when the server is 2 to get server_victor
@@ -81,20 +82,80 @@ def get_average_interval(id, subdata):
     return average_interval
 
 def create_markov_chain(id, subdata):
-    # Create a new list to store the combined states
-    states = []
+  # Define extended states
+  extended_states = [
+    'P1_serve_win', 'P1_serve_lose',
+    'P2_serve_win', 'P2_serve_lose'
+  ]
 
-    # Iterate over the rows in the dataframe
-    for index, row in subdata[match[id]].iterrows():
-        # Combine the 'server' and 'point_victor' columns and add the result to the list
-        states.append(str(row['server']) + "-" + str(row['point_victor']))
+  # Get the match data for the given id
+  subdata[match[id]]["point_victor"]= subdata[match[id]]["point_victor"].replace(0,2)
 
-    # Build the Markov Chain
-    mc = MarkovChain.from_data(states)
+  # Initialize transition count matrix
+  transition_counts = pd.DataFrame(0, index=extended_states, columns=extended_states)
+  match_data=subdata[match[id]]
 
-    return mc
+  # Iterate over the match data
+  for i in range(1, len(match_data)):
+    prev_point = match_data.iloc[i-1]
+    curr_point = match_data.iloc[i]
+
+    # Determine the state of the previous and current point
+    prev_state = 'P{}_serve_{}'.format(prev_point['server'], 'win' if prev_point['point_victor'] == prev_point['server'] else 'lose')
+    curr_state = 'P{}_serve_{}'.format(curr_point['server'], 'win' if curr_point['point_victor'] == curr_point['server'] else 'lose')
+
+    # Update transition counts
+    transition_counts.loc[prev_state, curr_state] += 1
+
+  # Calculate transition probabilities
+  transition_probabilities = transition_counts.div(transition_counts.sum(axis=1), axis=0)
+
+  return transition_probabilities
+transition_matrix = create_markov_chain(id, subdata)
+print(transition_matrix)
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Create a heatmap
+plt.figure(figsize=(7, 5))  # Increase the size of the figure
+sns.heatmap(transition_matrix, annot=True, fmt=".2%", cmap='Blues', annot_kws={"size": 10})  # Decrease the size of the annotation font
+
+# Show the plot
+plt.show()
+from datetime import datetime, timedelta
+
+def draw_bar_plot(id, subdata):
+        # Set the figure size (width, height)
+    plt.figure(figsize=(12, 6))
+
+    # Calculate the number of 1s subtracted by the number of 0s in 'point_victor'
+    y_values = subdata[match[id]]['p1_points_won'] - subdata[match[id]]['p2_points_won']
+    #print(y_values)
+    # Get the 'elapsed_time' values and convert them to total number of seconds
+    x_values = subdata[match[id]]['elapsed_time'].dt.total_seconds()
+    #print(x_values)
+    # Create the bar plot
+    plt.plot(x_values, y_values)
+
+    # Create xticks every 15 minutes
+    x_ticks = np.arange(min(x_values), max(x_values), 15*60)  # 15 minutes in seconds
+    x_tick_labels = [(datetime.min + timedelta(seconds=s)).time().strftime('%H:%M') for s in x_ticks]
+    plt.xticks(x_ticks, x_tick_labels)
+
+        # Add x and y labels
+    plt.xlabel('Elapsed Time (hh:mm)')
+    plt.ylabel('Points Difference (p1 - p2)')
+
+        # Add a title
+    plt.title(f'Plot for Match ID: {match[id]}')
+
+    # Add a horizontal line at y=0
+    plt.axhline(0, color='red', linestyle='--')
+
+    # Show the plot
+    plt.show()
 
 # Usage:
-#mc = create_markov_chain(0, subdata)
-#print(mc)
-print(subdata[match[id]].columns)
+for id in range(len(match)-1):
+    #print(id)
+    draw_bar_plot(id, subdata)
