@@ -57,6 +57,7 @@ for id in range(len(match)):
   X_train_scaled = scaler.fit_transform(X_train[match[id]].values)
   X_test_scaled[match[id]] = scaler.transform(X_test[match[id]].values)
   classifier[match[id]] = RandomForestClassifier(n_estimators=100, random_state=42)
+  #classifier[match[id]].fit(X_train_scaled, y_train[match[id]].values.ravel())
   classifier[match[id]].fit(X_train_scaled, y_train[match[id]].values.ravel())
 
 
@@ -67,10 +68,12 @@ for id in range(len(match)):
 
 accuracy={}
 importances={}
+feature_importances={}
 for id in range(len(match)):
   accuracy[match[id]] = accuracy_score(y_test[match[id]], y_pred[match[id]])
   importances[match[id]] = classifier[match[id]].feature_importances_
   feature_names = X_train[match[id]].columns
-  feature_importances = pd.Series(importances, index=feature_names).sort_values(ascending=False)
+  feature_importances[match[id]] = pd.Series(importances[match[id]], index=feature_names).sort_values(ascending=False)
 
-print(feature_importances)
+print(feature_importances[match[id]])
+print(accuracy[match[id]])
